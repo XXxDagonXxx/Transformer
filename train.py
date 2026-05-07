@@ -1,12 +1,13 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 import numpy as np
 from tqdm import tqdm
 import os
 import sys
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
 
 from configs.config import config
 from data.dataset import UBFCDataset
@@ -17,8 +18,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
     model.train()
     total_loss = 0
     loss_dicts = []
+    num_batches = 0
     
     for batch_idx, (rgb_signal, gt_signal, gt_bpm) in enumerate(tqdm(dataloader, desc="Training")):
+        if rgb_signal is None:
+            continue
+            
         rgb_signal = rgb_signal.to(device)
         gt_signal = gt_signal.to(device)
         gt_bpm = gt_bpm.to(device)
@@ -29,7 +34,7 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         pred_signal, pred_bpm = model(rgb_signal)
         
         # Compute loss
-        loss, loss_dict = criterion(pred_signal, pred_bpm, gt_signal, gt_bpm)
+        loss, loss_dict = criterion(pred_signal, pred_bpm, gt_signal, gt_bpm, config.fps)
         
         # Backward pass
         loss.backward()
@@ -38,8 +43,12 @@ def train_epoch(model, dataloader, criterion, optimizer, device):
         
         total_loss += loss.item()
         loss_dicts.append(loss_dict)
+        num_batches += 1
     
-    avg_loss = total_loss / len(dataloader)
+    if num_batches == 0:
+        return 0, {}
+    
+    avg_loss = total_loss / num_batches
     avg_loss_dict = {
         k: np.mean([d[k] for d in loss_dicts]) for k in loss_dicts[0].keys()
     }
@@ -50,9 +59,13 @@ def validate(model, dataloader, criterion, device):
     model.eval()
     total_loss = 0
     loss_dicts = []
+    num_batches = 0
     
     with torch.no_grad():
         for batch_idx, (rgb_signal, gt_signal, gt_bpm) in enumerate(tqdm(dataloader, desc="Validation")):
+            if rgb_signal is None:
+                continue
+                
             rgb_signal = rgb_signal.to(device)
             gt_signal = gt_signal.to(device)
             gt_bpm = gt_bpm.to(device)
@@ -61,12 +74,16 @@ def validate(model, dataloader, criterion, device):
             pred_signal, pred_bpm = model(rgb_signal)
             
             # Compute loss
-            loss, loss_dict = criterion(pred_signal, pred_bpm, gt_signal, gt_bpm)
+            loss, loss_dict = criterion(pred_signal, pred_bpm, gt_signal, gt_bpm, config.fps)
             
             total_loss += loss.item()
             loss_dicts.append(loss_dict)
+            num_batches += 1
     
-    avg_loss = total_loss / len(dataloader)
+    if num_batches == 0:
+        return 0, {}
+    
+    avg_loss = total_loss / num_batches
     avg_loss_dict = {
         k: np.mean([d[k] for d in loss_dicts]) for k in loss_dicts[0].keys()
     }
@@ -74,30 +91,42 @@ def validate(model, dataloader, criterion, device):
     return avg_loss, avg_loss_dict
 
 def main():
+    print(f"Using device: {config.device}")
+    print(f"Data root: {config.data_root}")
+    
     # Create save directory
     os.makedirs(config.save_dir, exist_ok=True)
     
     # Dataset and DataLoader
+    print("Loading datasets...")
     train_dataset = UBFCDataset(
         data_root=config.data_root,
         sequence_length=config.sequence_length,
         fps=config.fps,
-        is_train=True
+        ppg_fs=config.ppg_fs,
+        is_train=True,
+        split_ratio=config.train_split
     )
     
     val_dataset = UBFCDataset(
         data_root=config.data_root,
         sequence_length=config.sequence_length,
         fps=config.fps,
-        is_train=False
+        ppg_fs=config.ppg_fs,
+        is_train=False,
+        split_ratio=config.train_split
     )
+    
+    if len(train_dataset) == 0:
+        print("ERROR: No training samples found! Check data_root path in config.py")
+        return
     
     train_loader = DataLoader(
         train_dataset,
         batch_size=config.batch_size,
         shuffle=True,
         num_workers=config.num_workers,
-        pin_memory=True
+        pin_memory=True if config.device.type == 'cuda' else False
     )
     
     val_loader = DataLoader(
@@ -105,10 +134,11 @@ def main():
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
-        pin_memory=True
+        pin_memory=True if config.device.type == 'cuda' else False
     )
     
     # Model
+    print("Initializing model...")
     model = TransformerEncoder(
         input_dim=3,
         d_model=config.d_model,
@@ -118,6 +148,8 @@ def main():
         dropout=config.dropout,
         max_seq_length=config.max_seq_length
     ).to(config.device)
+    
+    print(f"Model parameters: {sum(p.numel() for p in model.parameters())}")
     
     # Loss and optimizer
     criterion = RPPGLoss(
@@ -133,12 +165,13 @@ def main():
     )
     
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
-        optimizer, mode='min', factor=0.5, patience=10, verbose=True
+        optimizer, mode='min', factor=0.5, patience=5, verbose=True
     )
     
     # Training loop
     best_val_loss = float('inf')
     
+    print("\nStarting training...")
     for epoch in range(config.num_epochs):
         print(f"\nEpoch {epoch+1}/{config.num_epochs}")
         
@@ -153,14 +186,16 @@ def main():
         )
         
         print(f"Train Loss: {train_loss:.4f}, Val Loss: {val_loss:.4f}")
-        print(f"Train Losses: {train_loss_dict}")
-        print(f"Val Losses: {val_loss_dict}")
+        if train_loss_dict:
+            print(f"Train Losses: {train_loss_dict}")
+            print(f"Val Losses: {val_loss_dict}")
         
         # Scheduler step
-        scheduler.step(val_loss)
+        if val_loss > 0:
+            scheduler.step(val_loss)
         
         # Save best model
-        if val_loss < best_val_loss:
+        if 0 < val_loss < best_val_loss:
             best_val_loss = val_loss
             torch.save({
                 'epoch': epoch,

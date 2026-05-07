@@ -22,6 +22,9 @@ class SignalProcessor:
     def compute_bpm_from_fft(self, signal_data: np.ndarray) -> float:
         """Compute BPM using FFT"""
         n = len(signal_data)
+        if n == 0:
+            return 0.0
+        
         yf = fft(signal_data)
         xf = fftfreq(n, 1 / self.fs)
         
@@ -33,7 +36,7 @@ class SignalProcessor:
         if len(magnitudes) > 0:
             peak_freq = freqs[np.argmax(magnitudes)]
             bpm = peak_freq * 60
-            return bpm
+            return float(bpm)
         return 0.0
     
     def normalize_signal(self, signal_data: np.ndarray) -> np.ndarray:

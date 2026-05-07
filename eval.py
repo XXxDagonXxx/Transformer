@@ -7,7 +7,9 @@ import sys
 from scipy.stats import pearsonr
 from scipy.fft import fft, fftfreq
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
 
 from configs.config import config
 from data.dataset import UBFCDataset
@@ -25,10 +27,13 @@ def compute_metrics(pred_bpm, gt_bpm):
     
     return mae, rmse, pearson
 
-def compute_bpm_from_signal(signal, fs=30):
+def compute_bpm_from_signal(signal_data, fs=30):
     """Compute BPM from rPPG signal using FFT"""
-    n = len(signal)
-    yf = fft(signal)
+    n = len(signal_data)
+    if n == 0:
+        return 0.0
+    
+    yf = fft(signal_data)
     xf = fftfreq(n, 1/fs)
     
     # Get positive frequencies within bandpass range
@@ -39,7 +44,7 @@ def compute_bpm_from_signal(signal, fs=30):
     if len(magnitudes) > 0:
         peak_freq = freqs[np.argmax(magnitudes)]
         bpm = peak_freq * 60
-        return bpm
+        return float(bpm)
     return 0.0
 
 def evaluate(model, dataloader, device, fs=30):
@@ -51,25 +56,28 @@ def evaluate(model, dataloader, device, fs=30):
     
     with torch.no_grad():
         for batch_idx, (rgb_signal, gt_signal, gt_bpm) in enumerate(tqdm(dataloader, desc="Evaluating")):
+            if rgb_signal is None:
+                continue
+                
             rgb_signal = rgb_signal.to(device)
             gt_signal = gt_signal.to(device)
-            gt_bpm = gt_bpm.numpy()
+            gt_bpm_np = gt_bpm.numpy()
             
             # Forward pass
             pred_signal, pred_bpm = model(rgb_signal)
             
-            pred_signal = pred_signal.cpu().numpy()
-            pred_bpm = pred_bpm.cpu().numpy().flatten()
+            pred_signal_np = pred_signal.cpu().numpy()
+            pred_bpm_np = pred_bpm.cpu().numpy().flatten()
             
             # Compute BPM from predicted signal using FFT
-            for i in range(len(pred_signal)):
-                sig = pred_signal[i]
+            for i in range(len(pred_signal_np)):
+                sig = pred_signal_np[i]
                 bpm_from_signal = compute_bpm_from_signal(sig, fs)
                 all_pred_bpm.append(bpm_from_signal)
             
-            all_gt_bpm.extend(gt_bpm.flatten())
-            all_pred_signals.extend(pred_signal)
-            all_gt_signals.extend(gt_signal.numpy())
+            all_gt_bpm.extend(gt_bpm_np.flatten())
+            all_pred_signals.extend(pred_signal_np)
+            all_gt_signals.extend(gt_signal.cpu().numpy())
     
     all_pred_bpm = np.array(all_pred_bpm)
     all_gt_bpm = np.array(all_gt_bpm)
@@ -93,7 +101,9 @@ def main():
         data_root=config.data_root,
         sequence_length=config.sequence_length,
         fps=config.fps,
-        is_train=False
+        ppg_fs=config.ppg_fs,
+        is_train=False,
+        split_ratio=config.train_split
     )
     
     test_loader = DataLoader(
@@ -101,7 +111,7 @@ def main():
         batch_size=config.batch_size,
         shuffle=False,
         num_workers=config.num_workers,
-        pin_memory=True
+        pin_memory=True if config.device.type == 'cuda' else False
     )
     
     # Load model
@@ -115,10 +125,14 @@ def main():
         max_seq_length=config.max_seq_length
     ).to(config.device)
     
-    checkpoint = torch.load(
-        os.path.join(config.save_dir, config.model_name),
-        map_location=config.device
-    )
+    model_path = os.path.join(config.save_dir, config.model_name)
+    
+    if not os.path.exists(model_path):
+        print(f"Model not found at {model_path}")
+        print("Please train the model first using train.py")
+        return
+    
+    checkpoint = torch.load(model_path, map_location=config.device)
     model.load_state_dict(checkpoint['model_state_dict'])
     print(f"Loaded model from epoch {checkpoint['epoch']}")
     
@@ -134,7 +148,7 @@ def main():
     print("="*50)
     
     # Save results
-    np.save(os.path.join(config.save_dir, 'eval_results.npy'), results)
+    np.save(os.path.join(config.save_dir, "eval_results.npy"), results)
     print(f"Results saved to {os.path.join(config.save_dir, 'eval_results.npy')}")
 
 if __name__ == "__main__":

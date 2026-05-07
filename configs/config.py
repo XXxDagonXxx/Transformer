@@ -5,22 +5,21 @@ from typing import List, Optional
 @dataclass
 class Config:
     # Dataset
-    data_root: str = "/path/to/UBFC-rPPG"
-    video_dir: str = "videos"
-    ground_truth_path: str = "ground_truth"
+    data_root: str = "/home/dhruv/Documents/rppg project/UBFC/dataset 2"  # UPDATE THIS
     sequence_length: int = 300  # T in (T, 3)
-    fps: int = 30
-    batch_size: int = 16
-    num_workers: int = 4
+    fps: int = 30  # Video frame rate
+    ppg_fs: int = 60  # PPG sampling rate in UBFC-rPPG
+    batch_size: int = 4
+    num_workers: int = 0  # Set to 0 for debugging
+    train_split: float = 0.8
     
     # ROI Extraction
-    roi_regions: List[str] = None  # forehead, left_cheek, right_cheek
+    roi_regions: List[str] = None
     face_detection_confidence: float = 0.5
     
     # Signal Processing
     bandpass_low: float = 0.7  # Hz
     bandpass_high: float = 4.0  # Hz
-    sampling_rate: int = 30
     
     # Model
     d_model: int = 128
@@ -31,7 +30,7 @@ class Config:
     max_seq_length: int = 300
     
     # Training
-    num_epochs: int = 100
+    num_epochs: int = 10
     learning_rate: float = 1e-4
     weight_decay: float = 1e-5
     signal_loss_weight: float = 1.0
@@ -39,13 +38,12 @@ class Config:
     freq_loss_weight: float = 0.3
     
     # Optimization
-    use_gpu: bool = torch.cuda.is_available()
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     save_dir: str = "checkpoints"
     model_name: str = "transformer_rppg.pth"
     
     # Evaluation
-    metrics: List[str] = None  # MAE, RMSE, Pearson
+    metrics: List[str] = None
     
     def __post_init__(self):
         if self.roi_regions is None:

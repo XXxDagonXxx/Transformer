@@ -5,7 +5,9 @@ import os
 import sys
 from typing import Tuple
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add project root to path
+project_root = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, project_root)
 
 from configs.config import config
 from models.transformer import TransformerEncoder

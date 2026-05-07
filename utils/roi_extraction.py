@@ -6,7 +6,7 @@ class ROIExtractor:
     def __init__(self, regions: List[str] = None):
         self.regions = regions or ["forehead", "left_cheek", "right_cheek"]
     
-    def extract_roi(self, frame: np.ndarray, bbox: Tuple[int, int, int, int]) -> Dict[str, np.ndarray]:
+    def extract_roi(self, frame: np.ndarray, bbox) -> dict:
         """Extract ROI regions from face bounding box"""
         x, y, w, h = bbox
         roi_regions = {}
